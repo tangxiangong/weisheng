@@ -152,7 +152,7 @@ fn main() -> Result<()> {
         &left_align,
     )?;
     worksheet.merge_range(1, 5, 1, 7, "验评对象: 高一、高二、高三", &center_bold)?;
-    worksheet.write_string_with_format(1, 8, &format!("日期: {}", args.date), &center_bold)?;
+    worksheet.write_string_with_format(1, 8, format!("日期: {}", args.date), &center_bold)?;
     worksheet.write_string_with_format(2, 0, "验评部门", &center_bold)?;
     worksheet.merge_range(2, 1, 2, 8, "校办公室", &cell_fmt)?;
     worksheet.write_string_with_format(3, 0, "验评项目", &center_bold)?;
@@ -251,12 +251,7 @@ fn main() -> Result<()> {
             for r in &sorted_rs {
                 worksheet.write_string_with_format(row, 2, &r.teacher, &cell_fmt)?;
                 worksheet.write_string_with_format(row, 3, &r.manager, &cell_fmt)?;
-                worksheet.write_string_with_format(
-                    row,
-                    4,
-                    &format!("{}宿舍", r.dorm),
-                    &cell_fmt,
-                )?;
+                worksheet.write_string_with_format(row, 4, format!("{}宿舍", r.dorm), &cell_fmt)?;
                 worksheet.write_string_with_format(row, 5, &r.reason, &cell_fmt)?;
                 worksheet.write_number_with_format(row, 6, r.deduction as f64, &cell_fmt)?;
                 row += 1;
@@ -316,7 +311,7 @@ fn main() -> Result<()> {
         &left_align,
     )?;
     worksheet.merge_range(row, 5, row, 7, "验评对象: 高一、高二、高三", &center_bold)?;
-    worksheet.write_string_with_format(row, 8, &format!("日期: {}", args.date), &center_bold)?;
+    worksheet.write_string_with_format(row, 8, format!("日期: {}", args.date), &center_bold)?;
     row += 1;
     worksheet.write_string_with_format(row, 0, "验评部门", &center_bold)?;
     worksheet.merge_range(row, 1, row, 8, "校办公室", &cell_fmt)?;
@@ -428,7 +423,7 @@ fn main() -> Result<()> {
                     worksheet.write_string_with_format(
                         row,
                         2,
-                        &format!("{}宿舍", r.dorm),
+                        format!("{}宿舍", r.dorm),
                         &cell_fmt,
                     )?;
                     worksheet.merge_range(row, 3, row, 4, &r.reason, &cell_fmt)?;
