@@ -141,6 +141,65 @@ pub fn generate_report(
         .collect();
     apartments.sort_by(|a, b| b.cmp(a)); // 二号公寓在前
 
+    // Calculate global rankings for all departments (not per apartment)
+    let mut all_dept_groups: HashMap<(u8, String), Vec<&ProcessedRecord>> = HashMap::new();
+
+    // Initialize all departments from jibu_map
+    for (grade, dept) in jibu_map.keys() {
+        all_dept_groups.entry((*grade, dept.clone())).or_default();
+    }
+
+    // Group all records by department (across all apartments)
+    for r in &processed_data {
+        if !r.dept.is_empty() {
+            all_dept_groups
+                .entry((r.grade, r.dept.clone()))
+                .or_default()
+                .push(r);
+        }
+    }
+
+    // Calculate totals for all departments
+    let mut all_dept_totals: Vec<((u8, String), i32)> = all_dept_groups
+        .iter()
+        .map(|(k, v)| (k.clone(), v.iter().map(|r| r.deduction).sum()))
+        .collect();
+    all_dept_totals.sort_by(|a, b| b.1.cmp(&a.1)); // 扣分少的排名靠前（0 > -1 > -2）
+
+    // Compute global ranks for all departments (并列不跳号: 1,1,2,3)
+    let mut global_dept_rank_map: HashMap<(u8, String), i32> = HashMap::new();
+    if !all_dept_totals.is_empty() {
+        let mut cur_rank = 1;
+        let mut prev_score = all_dept_totals[0].1;
+        global_dept_rank_map.insert(all_dept_totals[0].0.clone(), cur_rank);
+
+        for (key, score) in all_dept_totals.iter().skip(1) {
+            if *score != prev_score {
+                cur_rank += 1;
+                prev_score = *score;
+            }
+            global_dept_rank_map.insert(key.clone(), cur_rank);
+        }
+    }
+
+    // Check which apartments have records for 高二A部 (special case)
+    let mut apt2a_has_records: HashMap<u8, bool> = HashMap::new();
+    for r in &processed_data {
+        if r.grade == 2 && r.dept == "A" {
+            apt2a_has_records.insert(r.apartment, true);
+        }
+    }
+    let apt2a_in_both = apt2a_has_records.contains_key(&1) && apt2a_has_records.contains_key(&2);
+    let apt2a_in_apt1_only =
+        apt2a_has_records.contains_key(&1) && !apt2a_has_records.contains_key(&2);
+    let apt2a_in_apt2_only =
+        apt2a_has_records.contains_key(&2) && !apt2a_has_records.contains_key(&1);
+    let apt2a_in_neither = apt2a_has_records.is_empty();
+
+    // Track row ranges for 高二A部 to merge across apartments
+    let mut apt2a_start_row: Option<u32> = None;
+    let mut apt2a_end_row: Option<u32> = None;
+
     for apt in &apartments {
         let apt_name = format!("{}号公寓", if *apt == 1 { "一" } else { "二" });
 
@@ -148,6 +207,29 @@ pub fn generate_report(
         let mut dept_groups: HashMap<(u8, String), Vec<&ProcessedRecord>> = HashMap::new();
         let mut class_groups: HashMap<u8, Vec<&ProcessedRecord>> = HashMap::new();
 
+        // Initialize departments that belong to this apartment (based on jibu.csv)
+        for ((grade, dept), (_, default_apt)) in jibu_map.iter() {
+            // Special handling for 高二A部
+            if *grade == 2 && dept == "A" {
+                if apt2a_in_both {
+                    // Show in both apartments
+                    dept_groups.entry((*grade, dept.clone())).or_default();
+                } else if apt2a_in_apt1_only && *apt == 1 {
+                    // Only show in apt 1
+                    dept_groups.entry((*grade, dept.clone())).or_default();
+                } else if apt2a_in_apt2_only && *apt == 2 {
+                    // Only show in apt 2
+                    dept_groups.entry((*grade, dept.clone())).or_default();
+                } else if apt2a_in_neither && *apt == 1 {
+                    // No records anywhere, show in default apt (1)
+                    dept_groups.entry((*grade, dept.clone())).or_default();
+                }
+            } else if *default_apt == *apt {
+                dept_groups.entry((*grade, dept.clone())).or_default();
+            }
+        }
+
+        // Add records to departments (only records from this apartment)
         for r in processed_data.iter().filter(|r| r.apartment == *apt) {
             if r.dept.is_empty() {
                 // No department - group by class number (17班, 18班)
@@ -166,49 +248,29 @@ pub fn generate_report(
             .iter()
             .map(|(k, v)| (k.clone(), v.iter().map(|r| r.deduction).sum()))
             .collect();
-        dept_totals.sort_by(|a, b| b.1.cmp(&a.1));
+        dept_totals.sort_by(|a, b| b.1.cmp(&a.1)); // 扣分少的排名靠前（0 > -1 > -2）
 
         // Calculate totals for class groups (no dept)
         let mut class_totals: Vec<(u8, i32)> = class_groups
             .iter()
             .map(|(k, v)| (*k, v.iter().map(|r| r.deduction).sum()))
             .collect();
-        class_totals.sort_by(|a, b| b.1.cmp(&a.1));
+        class_totals.sort_by(|a, b| b.1.cmp(&a.1)); // 扣分少的排名靠前（0 > -1 > -2）
 
-        // Compute ranks for dept groups
-        let mut dept_rank_map: HashMap<(u8, String), i32> = HashMap::new();
-        let (mut cur_rank, mut last_score, mut cnt) = (1, i32::MAX, 0);
-        for (i, (key, score)) in dept_totals.iter().enumerate() {
-            if i == 0 {
-                cur_rank = 1;
-                last_score = *score;
-                cnt = 1;
-            } else if *score == last_score {
-                cnt += 1;
-            } else {
-                cur_rank += cnt;
-                cnt = 1;
-                last_score = *score;
-            }
-            dept_rank_map.insert(key.clone(), cur_rank);
-        }
-
-        // Compute ranks for class groups (no dept)
+        // Compute ranks for class groups (no dept) (并列不跳号)
         let mut class_rank_map: HashMap<u8, i32> = HashMap::new();
-        let (mut cur_rank, mut last_score, mut cnt) = (1, i32::MAX, 0);
-        for (i, (key, score)) in class_totals.iter().enumerate() {
-            if i == 0 {
-                cur_rank = 1;
-                last_score = *score;
-                cnt = 1;
-            } else if *score == last_score {
-                cnt += 1;
-            } else {
-                cur_rank += cnt;
-                cnt = 1;
-                last_score = *score;
+        if !class_totals.is_empty() {
+            let mut cur_rank = 1;
+            let mut prev_score = class_totals[0].1;
+            class_rank_map.insert(class_totals[0].0, cur_rank);
+
+            for (class, score) in class_totals.iter().skip(1) {
+                if *score != prev_score {
+                    cur_rank += 1; // 不跳号，只加1
+                    prev_score = *score;
+                }
+                class_rank_map.insert(*class, cur_rank);
             }
-            class_rank_map.insert(*key, cur_rank);
         }
 
         // Sort dept keys: 高一A, 高一B, 高二A, 高二B, 高三A, 高三B
@@ -227,15 +289,10 @@ pub fn generate_report(
 
         let apt_start = row;
 
-        // First render dept groups
+        // First render dept groups (all departments that belong to this apartment)
         for (grade, dept) in sorted_dept_keys {
             let rs = dept_groups.get(&(grade, dept.clone())).unwrap();
-            let total = dept_totals
-                .iter()
-                .find(|(k, _)| *k == (grade, dept.clone()))
-                .unwrap()
-                .1;
-            let rank = *dept_rank_map.get(&(grade, dept.clone())).unwrap();
+
             let grade_name = match grade {
                 1 => "高一",
                 2 => "高二",
@@ -244,148 +301,172 @@ pub fn generate_report(
             };
             let leader = jibu_map
                 .get(&(grade, dept.clone()))
-                .cloned()
+                .map(|(l, _)| l.clone())
                 .unwrap_or_default();
             let dept_display = format!("{}{}部\n({})", grade_name, dept, leader);
 
-            let mut sorted_rs: Vec<_> = rs.iter().collect();
-            sorted_rs.sort_by_key(|r| r.dorm);
             let grp_start = row;
 
-            // First pass: write dorm, reason, deduction for each row
-            for r in &sorted_rs {
-                worksheet.write_string_with_format(row, 4, format!("{}宿舍", r.dorm), &cell_fmt)?;
-                worksheet.write_string_with_format(row, 5, &r.reason, &cell_fmt)?;
-                worksheet.write_number_with_format(row, 6, r.deduction as f64, &cell_fmt)?;
+            // Track 高二A部 row range for cross-apartment merging
+            let is_2a = grade == 2 && dept == "A";
+            if is_2a && apt2a_in_both
+                && apt2a_start_row.is_none() {
+                    apt2a_start_row = Some(row);
+                }
+
+            let total = dept_totals
+                .iter()
+                .find(|(k, _)| *k == (grade, dept.clone()))
+                .unwrap()
+                .1;
+            let rank = *global_dept_rank_map.get(&(grade, dept.clone())).unwrap();
+
+            if rs.is_empty() {
+                // No issues for this department - display a row with "/"
+                worksheet.write_string_with_format(row, 1, &dept_display, &cell_fmt)?;
+                worksheet.write_string_with_format(row, 2, "/", &cell_fmt)?;
+                worksheet.write_string_with_format(row, 3, "/", &cell_fmt)?;
+                worksheet.write_string_with_format(row, 4, "/", &cell_fmt)?;
+                worksheet.write_string_with_format(row, 5, "/", &cell_fmt)?;
+                worksheet.write_string_with_format(row, 6, "/", &cell_fmt)?;
+                worksheet.write_string_with_format(row, 7, "/", &cell_fmt)?;
+                worksheet.write_number_with_format(row, 8, rank as f64, &cell_fmt)?;
                 row += 1;
-            }
+            } else {
+                let mut sorted_rs: Vec<_> = rs.iter().collect();
+                sorted_rs.sort_by_key(|r| r.dorm);
 
-            // Second pass: merge adjacent cells with same teacher (col 2) and manager (col 3)
-            if !sorted_rs.is_empty() {
-                let mut i = 0;
-                while i < sorted_rs.len() {
-                    let teacher = &sorted_rs[i].teacher;
-                    let mut j = i + 1;
-                    while j < sorted_rs.len() && &sorted_rs[j].teacher == teacher {
-                        j += 1;
-                    }
-                    let start_row = grp_start + i as u32;
-                    let end_row = grp_start + j as u32 - 1;
-                    if end_row > start_row {
-                        worksheet.merge_range(start_row, 2, end_row, 2, teacher, &cell_fmt)?;
-                    } else {
-                        worksheet.write_string_with_format(start_row, 2, teacher, &cell_fmt)?;
-                    }
-                    i = j;
-                }
+                // Write each dorm as a separate row
+                for (idx, r) in sorted_rs.iter().enumerate() {
+                    let current_row = grp_start + idx as u32;
 
-                let mut i = 0;
-                while i < sorted_rs.len() {
-                    let manager = &sorted_rs[i].manager;
-                    let mut j = i + 1;
-                    while j < sorted_rs.len() && &sorted_rs[j].manager == manager {
-                        j += 1;
-                    }
-                    let start_row = grp_start + i as u32;
-                    let end_row = grp_start + j as u32 - 1;
-                    if end_row > start_row {
-                        worksheet.merge_range(start_row, 3, end_row, 3, manager, &cell_fmt)?;
-                    } else {
-                        worksheet.write_string_with_format(start_row, 3, manager, &cell_fmt)?;
-                    }
-                    i = j;
-                }
-            }
-
-            if row > grp_start {
-                if row - grp_start > 1 {
-                    worksheet.merge_range(grp_start, 1, row - 1, 1, &dept_display, &cell_fmt)?;
-                    worksheet.merge_range(
-                        grp_start,
-                        7,
-                        row - 1,
-                        7,
-                        &total.to_string(),
+                    // Write teacher (col 2)
+                    worksheet.write_string_with_format(current_row, 2, &r.teacher, &cell_fmt)?;
+                    // Write manager (col 3)
+                    worksheet.write_string_with_format(current_row, 3, &r.manager, &cell_fmt)?;
+                    // Write dorm (col 4)
+                    worksheet.write_string_with_format(
+                        current_row,
+                        4,
+                        format!("{}宿舍", r.dorm),
                         &cell_fmt,
                     )?;
-                    worksheet.merge_range(
-                        grp_start,
-                        8,
-                        row - 1,
-                        8,
-                        &rank.to_string(),
+                    // Write reason (col 5)
+                    worksheet.write_string_with_format(current_row, 5, &r.reason, &cell_fmt)?;
+                    // Write deduction (col 6)
+                    worksheet.write_number_with_format(
+                        current_row,
+                        6,
+                        r.deduction as f64,
                         &cell_fmt,
                     )?;
-                } else {
-                    worksheet.write_string_with_format(grp_start, 1, &dept_display, &cell_fmt)?;
-                    worksheet.write_number_with_format(grp_start, 7, total as f64, &cell_fmt)?;
-                    worksheet.write_number_with_format(grp_start, 8, rank as f64, &cell_fmt)?;
+                }
+
+                row += sorted_rs.len() as u32;
+
+                // Track end row for 高二A部
+                if is_2a && apt2a_in_both {
+                    apt2a_end_row = Some(row - 1);
+                }
+
+                // For 高二A部 in both apartments, skip merging here (will merge across apartments later)
+                if !(is_2a && apt2a_in_both) {
+                    // Merge dept name (col 1), total (col 7), and rank (col 8) across all rows
+                    if sorted_rs.len() > 1 {
+                        worksheet.merge_range(
+                            grp_start,
+                            1,
+                            row - 1,
+                            1,
+                            &dept_display,
+                            &cell_fmt,
+                        )?;
+                        worksheet.merge_range(
+                            grp_start,
+                            7,
+                            row - 1,
+                            7,
+                            &total.to_string(),
+                            &cell_fmt,
+                        )?;
+                        worksheet.merge_range(
+                            grp_start,
+                            8,
+                            row - 1,
+                            8,
+                            &rank.to_string(),
+                            &cell_fmt,
+                        )?;
+                    } else {
+                        worksheet.write_string_with_format(
+                            grp_start,
+                            1,
+                            &dept_display,
+                            &cell_fmt,
+                        )?;
+                        worksheet.write_number_with_format(
+                            grp_start,
+                            7,
+                            total as f64,
+                            &cell_fmt,
+                        )?;
+                        worksheet.write_number_with_format(grp_start, 8, rank as f64, &cell_fmt)?;
+                    }
                 }
             }
         }
 
         // Then render class groups (no dept) - 17班, 18班 at the bottom
+        // Only show classes if they have issues
         for class_num in sorted_class_keys {
             let rs = class_groups.get(&class_num).unwrap();
-            let total = class_totals
-                .iter()
-                .find(|(k, _)| *k == class_num)
-                .unwrap()
-                .1;
-            let rank = *class_rank_map.get(&class_num).unwrap();
-            let class_display = format!("{}班", class_num);
 
-            let mut sorted_rs: Vec<_> = rs.iter().collect();
-            sorted_rs.sort_by_key(|r| r.dorm);
-            let grp_start = row;
+            // Skip classes without issues (高三17、18班若没问题可不显示)
+            if rs.is_empty() {
+                continue;
+            } else {
+                let total = class_totals
+                    .iter()
+                    .find(|(k, _)| *k == class_num)
+                    .unwrap()
+                    .1;
+                let rank = *class_rank_map.get(&class_num).unwrap();
+                let class_display = format!("{}班", class_num);
 
-            // First pass: write dorm, reason, deduction for each row
-            for r in &sorted_rs {
-                worksheet.write_string_with_format(row, 4, format!("{}宿舍", r.dorm), &cell_fmt)?;
-                worksheet.write_string_with_format(row, 5, &r.reason, &cell_fmt)?;
-                worksheet.write_number_with_format(row, 6, r.deduction as f64, &cell_fmt)?;
-                row += 1;
-            }
+                let mut sorted_rs: Vec<_> = rs.iter().collect();
+                sorted_rs.sort_by_key(|r| r.dorm);
+                let grp_start = row;
 
-            // Second pass: merge adjacent cells with same teacher (col 2) and manager (col 3)
-            if !sorted_rs.is_empty() {
-                let mut i = 0;
-                while i < sorted_rs.len() {
-                    let teacher = &sorted_rs[i].teacher;
-                    let mut j = i + 1;
-                    while j < sorted_rs.len() && &sorted_rs[j].teacher == teacher {
-                        j += 1;
-                    }
-                    let start_row = grp_start + i as u32;
-                    let end_row = grp_start + j as u32 - 1;
-                    if end_row > start_row {
-                        worksheet.merge_range(start_row, 2, end_row, 2, teacher, &cell_fmt)?;
-                    } else {
-                        worksheet.write_string_with_format(start_row, 2, teacher, &cell_fmt)?;
-                    }
-                    i = j;
+                // Write each dorm as a separate row
+                for (idx, r) in sorted_rs.iter().enumerate() {
+                    let current_row = grp_start + idx as u32;
+
+                    // Write teacher (col 2)
+                    worksheet.write_string_with_format(current_row, 2, &r.teacher, &cell_fmt)?;
+                    // Write manager (col 3)
+                    worksheet.write_string_with_format(current_row, 3, &r.manager, &cell_fmt)?;
+                    // Write dorm (col 4)
+                    worksheet.write_string_with_format(
+                        current_row,
+                        4,
+                        format!("{}宿舍", r.dorm),
+                        &cell_fmt,
+                    )?;
+                    // Write reason (col 5)
+                    worksheet.write_string_with_format(current_row, 5, &r.reason, &cell_fmt)?;
+                    // Write deduction (col 6)
+                    worksheet.write_number_with_format(
+                        current_row,
+                        6,
+                        r.deduction as f64,
+                        &cell_fmt,
+                    )?;
                 }
 
-                let mut i = 0;
-                while i < sorted_rs.len() {
-                    let manager = &sorted_rs[i].manager;
-                    let mut j = i + 1;
-                    while j < sorted_rs.len() && &sorted_rs[j].manager == manager {
-                        j += 1;
-                    }
-                    let start_row = grp_start + i as u32;
-                    let end_row = grp_start + j as u32 - 1;
-                    if end_row > start_row {
-                        worksheet.merge_range(start_row, 3, end_row, 3, manager, &cell_fmt)?;
-                    } else {
-                        worksheet.write_string_with_format(start_row, 3, manager, &cell_fmt)?;
-                    }
-                    i = j;
-                }
-            }
+                row += sorted_rs.len() as u32;
 
-            if row > grp_start {
-                if row - grp_start > 1 {
+                // Merge class name (col 1), total (col 7), and rank (col 8) across all rows
+                if sorted_rs.len() > 1 {
                     worksheet.merge_range(grp_start, 1, row - 1, 1, &class_display, &cell_fmt)?;
                     worksheet.merge_range(
                         grp_start,
@@ -419,6 +500,29 @@ pub fn generate_report(
             }
         }
     }
+
+    // If 高二A部 appears in both apartments, merge cells across apartments
+    if apt2a_in_both
+        && let (Some(start), Some(end)) = (apt2a_start_row, apt2a_end_row) {
+            // Get 高二A部 info
+            let leader = jibu_map
+                .get(&(2, "A".to_string()))
+                .map(|(l, _)| l.clone())
+                .unwrap_or_default();
+            let dept_display = format!("高二A部\n({})", leader);
+
+            // Get total and rank for 高二A部
+            let total: i32 = all_dept_groups
+                .get(&(2, "A".to_string()))
+                .map(|v| v.iter().map(|r| r.deduction).sum())
+                .unwrap_or(0);
+            let rank = *global_dept_rank_map.get(&(2, "A".to_string())).unwrap();
+
+            // Merge dept name (col 1), total (col 7), and rank (col 8) across both apartments
+            worksheet.merge_range(start, 1, end, 1, &dept_display, &cell_fmt)?;
+            worksheet.merge_range(start, 7, end, 7, &total.to_string(), &cell_fmt)?;
+            worksheet.merge_range(start, 8, end, 8, &rank.to_string(), &cell_fmt)?;
+        }
 
     row += 2;
 
@@ -492,23 +596,21 @@ pub fn generate_report(
                 (m.clone(), t)
             })
             .collect();
-        mgr_totals.sort_by(|a, b| b.1.cmp(&a.1));
+        mgr_totals.sort_by(|a, b| b.1.cmp(&a.1)); // 扣分少的排名靠前（0 > -1 > -2）
 
         let mut rank_map: HashMap<String, i32> = HashMap::new();
-        let (mut cur_rank, mut last_val, mut cnt) = (1, i32::MAX, 0);
-        for (i, (mgr, score)) in mgr_totals.iter().enumerate() {
-            if i == 0 {
-                cur_rank = 1;
-                last_val = *score;
-                cnt = 1;
-            } else if *score == last_val {
-                cnt += 1;
-            } else {
-                cur_rank += cnt;
-                cnt = 1;
-                last_val = *score;
+        if !mgr_totals.is_empty() {
+            let mut cur_rank = 1;
+            let mut prev_score = mgr_totals[0].1;
+            rank_map.insert(mgr_totals[0].0.clone(), cur_rank);
+
+            for (mgr, score) in mgr_totals.iter().skip(1) {
+                if *score != prev_score {
+                    cur_rank += 1; // 不跳号，只加1
+                    prev_score = *score;
+                }
+                rank_map.insert(mgr.clone(), cur_rank);
             }
-            rank_map.insert(mgr.clone(), cur_rank);
         }
 
         let mut mgr_floors: HashMap<String, u8> = HashMap::new();
@@ -663,13 +765,13 @@ fn get_all_managers<P: AsRef<Path>>(path: P) -> Result<Vec<(u8, u8, String)>> {
     Ok(list)
 }
 
-fn load_dept_data<P: AsRef<Path>>(path: P) -> Result<HashMap<(u8, String), String>> {
+fn load_dept_data<P: AsRef<Path>>(path: P) -> Result<HashMap<(u8, String), (String, u8)>> {
     let file = File::open(path)?;
     let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
     let mut map = HashMap::new();
     for result in rdr.deserialize() {
         let r: DepartmentRecord = result?;
-        map.insert((r.grade, r.dept), r.leader);
+        map.insert((r.grade, r.dept), (r.leader, r.apartment));
     }
     Ok(map)
 }

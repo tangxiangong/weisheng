@@ -44,6 +44,8 @@ pub struct DepartmentRecord {
     pub dept: String,
     #[serde(rename = "主任")]
     pub leader: String,
+    #[serde(rename = "公寓")]
+    pub apartment: u8,
 }
 
 pub struct ProcessedRecord {
