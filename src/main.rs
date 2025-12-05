@@ -62,7 +62,7 @@ struct JibuRecord {
     grade: u8,
     #[serde(rename = "级部")]
     dept: String,
-    #[serde(rename = "负责人")]
+    #[serde(rename = "主任")]
     leader: String,
 }
 
