@@ -29,13 +29,13 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        #[arg(short, long, default_value = "杨超超、申淑玲、赵冰、徐雪冰")]
+        #[arg(short, long, default_value = "")]
         reporter: String,
 
-        #[arg(short, long, default_value = "12月5日")]
+        #[arg(short, long, default_value = "xx月xx日")]
         date: String,
 
-        #[arg(short, long, default_value = "下午: 15:05-xx:xx")]
+        #[arg(short, long, default_value = "下午: xx:xx-xx:xx")]
         time: String,
     },
 }
