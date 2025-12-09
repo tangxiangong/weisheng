@@ -393,9 +393,11 @@ fn write_table1(
     write_table1_headers(ws, start_row, &fmt.header)?;
     let mut row = start_row + 1;
 
-    let mut apartments: Vec<u8> = data
-        .iter()
-        .map(|r| r.apartment)
+    // 公寓列表改为从级部配置中推导，而不是仅从实际数据中推导，
+    // 这样即使当天没有任何记录，也会为所有配置过的公寓生成表格结构。
+    let mut apartments: Vec<u8> = dpt_map
+        .values()
+        .map(|(_, apt)| *apt)
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
